@@ -1,0 +1,321 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Hybrid Desk live</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#050b18;--panel:rgba(8,17,31,.82);--line:rgba(62,224,255,.22);--tx:#d7e3f4;--mut:#7f93ad;--cy:#3ee0ff;--or:#ff9a3c;--up:#27e39a;--dn:#ff4d5e;color-scheme:dark}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--tx);font:14px/1.4 "Chakra Petch",system-ui,sans-serif;font-variant-numeric:tabular-nums;overflow:hidden}
+#cv{position:fixed;inset:0;width:100%;height:100%;background:var(--bg)}
+#ui{position:fixed;inset:0;display:grid;grid-template-rows:auto 1fr auto;gap:10px;padding:max(10px,env(safe-area-inset-top)) 10px max(10px,env(safe-area-inset-bottom));pointer-events:none}
+.bar,.pn{pointer-events:auto;background:var(--panel);border:1px solid var(--line);border-radius:6px;backdrop-filter:blur(6px);padding:8px 12px}
+.bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px}.bar b{color:var(--cy);font-size:17px}
+select,button{font:inherit;background:#0d1f38;color:var(--tx);border:1px solid var(--line);border-radius:4px;padding:3px 8px}
+#mid{display:grid;grid-template-columns:250px 1fr 280px;gap:10px;min-height:0}
+.col{display:flex;flex-direction:column;gap:10px;min-height:0}.pn h3{margin:0 0 6px;font-size:12px;font-weight:600;color:var(--cy);opacity:.8;display:flex;justify-content:space-between}
+.mut{color:var(--mut);font-size:12px}.g{display:grid;grid-template-columns:repeat(15,1fr);gap:1px;margin-bottom:6px}.g i{height:11px;border-radius:1px;background:#111c2e}
+.row{display:flex;justify-content:space-between}.up{color:var(--up)}.dn{color:var(--dn)}
+#sig{display:none;text-align:center;font-size:20px;font-weight:700;padding:6px;border-radius:4px;margin-bottom:6px}
+#log{overflow:auto;min-height:0;flex:1}.it{border-left:2px solid;padding-left:8px;margin-bottom:8px;font-size:12px}
+.bar label{display:flex;gap:5px;align-items:center;cursor:pointer}
+@media(max-width:900px){#mid{display:none}.mobonly{display:inline}}.mobonly{display:none}
+:focus-visible{outline:2px solid var(--cy)}
+#flash{position:fixed;inset:0;pointer-events:none;opacity:0;box-shadow:inset 0 0 140px 24px var(--c,#27e39a)}#flash.on{animation:fl 1.2s ease-out}@keyframes fl{from{opacity:.9}to{opacity:0}}@media (prefers-reduced-motion:reduce){#flash.on{animation:none}}
+</style></head><body>
+<canvas id="cv"></canvas><div id="flash"></div>
+<div id="ui">
+ <div class="bar"><b>Hybrid Desk</b><input id="sym" list="symlist" aria-label="Instrument" placeholder="Search any symbol" value="BTCUSDT" style="width:150px;font:inherit;background:#0d1f38;color:var(--tx);border:1px solid var(--line);border-radius:4px;padding:3px 8px"><datalist id="symlist"></datalist><select id="tf" aria-label="Timeframe"><option>1m</option><option selected>5m</option><option>15m</option><option>1H</option><option>4H</option></select><span id="px" style="font-size:22px;font-weight:600"></span><span id="ch"></span><span id="stat" class="mut"></span><span id="src" class="mut"></span><span id="mob" class="mobonly"></span>
+  <span class="mut" style="margin-left:auto">Live: crypto, gold and silver from Binance. CME futures are simulated here.</span></div>
+ <div id="mid">
+  <div class="col"><div class="pn"><h3><span>Sessions</span><span>Tokyo · London · New York</span></h3><canvas id="gl" width="440" height="240" style="width:100%"></canvas></div>
+   <div class="pn"><h3><span>75 agents</span><span id="cons"></span></h3><div id="ag"></div><div class="mut">One cell per agent. Green supports the setup, red opposes it.</div></div></div>
+  <div></div>
+  <div class="col"><div class="pn"><h3><span>Setup</span><span id="watch"></span></h3><div id="sig"></div><div id="stages"></div><div id="tkt" style="margin-top:6px"></div></div>
+   <div class="pn" style="flex:1;display:flex;flex-direction:column;min-height:0"><h3><span>Signal log</span><span id="cnt"></span></h3><div id="log"><div class="mut">The simulator plays a full setup about every 90 seconds.</div></div></div></div>
+ </div>
+ <div class="bar" id="lay"></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+// [symbol, name, category, tickSize, pointValue($), simulator base price, source]
+// Tick sizes are the exchange minimum increments: SL/TP are snapped to them.
+const R=[
+['ES','E-mini S&P 500','Futures',.25,50,6000],['MES','Micro E-mini S&P','Futures',.25,5,6000],
+['NQ','E-mini Nasdaq-100','Futures',.25,20,21000],['MNQ','Micro E-mini Nasdaq','Futures',.25,2,21000],
+['YM','E-mini Dow','Futures',1,5,43000],['RTY','E-mini Russell 2000','Futures',.1,50,2300],
+['GC','Gold (COMEX)','Futures',.1,100,2700],['MGC','Micro Gold','Futures',.1,10,2700],
+['SI','Silver (COMEX)','Futures',.005,5000,31],['CL','Crude Oil (NYMEX)','Futures',.01,1000,70],
+['NG','Natural Gas','Futures',.001,10000,3],['6E','Euro FX','Futures',.00005,125000,1.08],
+['6B','British Pound','Futures',.0001,62500,1.29],['6J','Japanese Yen','Futures',5e-7,12500000,.0067],
+['ZB','30-Yr T-Bond','Futures',.03125,1000,118],['ZN','10-Yr T-Note','Futures',.015625,1000,110],
+['6A','Australian Dollar','Futures',.0001,100000,.66],['6C','Canadian Dollar','Futures',.00005,100000,.72],['6N','New Zealand Dollar','Futures',.0001,100000,.59],
+['6S','Swiss Franc','Futures',.0001,125000,1.13],['6M','Mexican Peso','Futures',.00001,500000,.05],
+['HG','Copper','Futures',.0005,25000,4.2],['PL','Platinum','Futures',.1,50,1000],['PA','Palladium','Futures',.05,100,1000],['SIL','Micro Silver','Futures',.005,1000,31],
+['MCL','Micro Crude Oil','Futures',.01,100,70],['HO','Heating Oil','Futures',.0001,42000,2.4],['RB','RBOB Gasoline','Futures',.0001,42000,2],
+['ZC','Corn','Futures',.25,50,450],['ZS','Soybeans','Futures',.25,50,1000],['ZW','Wheat','Futures',.25,50,550],['LE','Live Cattle','Futures',.025,400,200],['HE','Lean Hogs','Futures',.025,400,90],
+['ZT','2-Yr T-Note','Futures',.00390625,2000,103],['ZF','5-Yr T-Note','Futures',.0078125,1000,108],['UB','Ultra T-Bond','Futures',.03125,1000,125],
+['M2K','Micro Russell 2000','Futures',.1,5,2300],['MYM','Micro Dow','Futures',1,.5,43000],
+['EURUSD','EUR/USD','Forex',1e-4,10,1.08],['GBPUSD','GBP/USD','Forex',1e-4,10,1.29],['USDJPY','USD/JPY','Forex',.001,6.7,150],
+['BTCUSDT','Bitcoin','Crypto',.01,1,90000,'binance'],['ETHUSDT','Ethereum','Crypto',.01,1,3200,'binance'],['SOLUSDT','Solana','Crypto',.01,1,180,'binance'],
+['XAUUSDT','Gold perpetual (Binance, live)','Commodities',.01,1,4000,'binancefut'],['XAGUSDT','Silver perpetual (Binance, live)','Commodities',.01,1,74,'binancefut'],
+['XAUUSD','Gold spot','Commodities',.01,1,2700],['XAGUSD','Silver spot','Commodities',.001,1,31],['USOIL','WTI spot','Commodities',.01,1,70],
+['US30','Dow Jones','Indices',1,1,43000],['NAS100','Nasdaq 100','Indices',.1,1,21000],['SPX500','S&P 500','Indices',.1,1,6000],
+['AAPL','Apple','Stocks',.01,1,230],['NVDA','Nvidia','Stocks',.01,1,140],['TSLA','Tesla','Stocks',.01,1,320]];
+const SPECS=Object.fromEntries(R.map(([sym,name,cat,tick,pv,base,src=cat==='Futures'?'databento':'sim'])=>
+ [sym,{sym,name,cat,tick,pv,base,src,dec:tick>=1?0:Math.min(7,Math.max(2,Math.ceil(-Math.log10(tick))))}]));
+const snap=(p,tick)=>Number((Math.round(p/tick)*tick).toFixed(8));
+const fmtPrice=(p,s)=>Number(p).toFixed(s.dec);
+// 75 deterministic analysis agents = 5 squads x 15 parameter variants. Rule-based (no LLM calls, no latency).
+// Each agent returns support in [-1,1] for the direction of the detected setup (ctx.d). Risk agents return a 0..1 gate.
+// Consensus = mean of the 60 directional votes, scaled by the mean Risk gate. The engine only signals if consensus > 0.15.
+const cl=x=>Math.max(-1,Math.min(1,x)),sum=(a,f)=>a.reduce((s,c)=>s+f(c),0);
+const atr=(C,n)=>sum(C.slice(-n),c=>c.h-c.l)/Math.max(1,Math.min(n,C.length))||1e-9;
+const N=[2,3,4,5,6,8,10,12,14,16,18,20,24,28,32];
+const SQUADS=['Momentum','Structure','Liquidity','OrderFlow','Risk'];
+const AGENTS=[
+ // Momentum: net displacement in the first n bars after the sweep, in ATR units
+ ...N.map(n=>({sq:'Momentum',id:`MOM-${n}`,f:({W,d})=>{const k=Math.min(n,W.length-1);return cl(d*(W[k].c-W[0].c)/(atr(W,W.length)*Math.sqrt(Math.max(k,1))))}})),
+ // Structure: where price sits vs the pre-sweep range after n bars (character change)
+ ...N.map(n=>({sq:'Structure',id:`STR-${n}`,f:({C,W,si,d})=>{const s=C.slice(Math.max(0,si-n),si+1),h=Math.max(...s.map(c=>c.h)),l=Math.min(...s.map(c=>c.l));return cl(d*(W[Math.min(n,W.length-1)].c-(h+l)/2)/((h-l)/2||1))}})),
+ // Liquidity: proximity to the level that was swept (4 levels x 3 distance scales) + 3 sweep-recency agents
+ ...[.5,1,2].flatMap(k=>[['pdl',1],['al',1],['pdh',-1],['ah',-1]].map(([key,s])=>({sq:'Liquidity',id:`LIQ-${key}-${k}`,f:({C,L,d})=>Math.abs(C[C.length-1].c-L[key])<atr(C,20)*k*3?s*d*.8:0}))),
+ ...[10,20,40].map(w=>({sq:'Liquidity',id:`SWP-${w}`,f:({C,bub,d})=>{const b=bub[bub.length-1],age=C.length-1-b.i;return age<w?d*b.d*(1-age/w):0}})),
+ // OrderFlow: aggressive buy ratio (taker volume) over the first n bars after the sweep
+ ...N.map(n=>({sq:'OrderFlow',id:`OF-${n}`,f:({W,d})=>{const s=W.slice(0,n+1);return cl(d*(sum(s,c=>c.bv)/sum(s,c=>c.v)-.5)*5)}})),
+ // Risk: volatility regime gate (blocks dead or chaotic markets)
+ ...N.map(n=>({sq:'Risk',id:`RSK-${n}`,f:({C})=>{const r=atr(C,n+3)/atr(C,60);return r>.4&&r<2.5?1:.4}}))];
+function runAgents(ctx){
+ const on=!!ctx.d&&ctx.W.length>1,votes=AGENTS.map(a=>({sq:a.sq,id:a.id,v:on?a.f(ctx):0}));
+ const m=s=>{const x=votes.filter(v=>v.sq===s);return sum(x,v=>v.v)/x.length};
+ const by=Object.fromEntries(SQUADS.map(s=>[s,m(s)])),dir=SQUADS.slice(0,4);
+ return {votes,by,score:on?dir.reduce((s,q)=>s+by[q],0)/4:0,risk:by.Risk};
+}
+// Phase4o4 rules (levels, sweep, MSS, OTE) fused with order-flow (volume spike, taker imbalance, HVN).
+// Pipeline: levels -> HVN -> sweep+absorption bubble -> MSS + stacked imbalance -> OTE retrace -> agent consensus -> signal.
+const hi=a=>Math.max(...a.map(c=>c.h)),lo=a=>Math.min(...a.map(c=>c.l));
+function analyze(C,spec,slTicks=4){
+ const out={levels:null,hvn:[],hvnMax:1,bubbles:[],imb:[],mss:null,ote:null,setup:null,signal:null,stages:{},agents:runAgents({W:[],d:0})};
+ const n=C.length;if(n<40)return out;
+ // Previous-day / Asia ranges come from session tags set by the feed (fallback: proportional blocks)
+ const P=C.filter(c=>c.s==='P'),A=C.filter(c=>c.s==='A');
+ const pd=P.length>9?P:C.slice(0,Math.floor(n*.4)),as=A.length>4?A:C.slice(Math.floor(n*.4),Math.floor(n*.55));
+ const L=out.levels={pdh:hi(pd),pdl:lo(pd),ah:hi(as),al:lo(as)};
+ // HVN: volume-at-price histogram, bins well above average volume
+ const mn=lo(C),nb=28,bw=(hi(C)-mn)/nb||1,bins=Array(nb).fill(0);
+ C.forEach(c=>bins[Math.min(nb-1,Math.floor(((c.h+c.l)/2-mn)/bw))]+=c.v);
+ const avg=bins.reduce((a,b)=>a+b,0)/nb;out.hvnMax=Math.max(...bins);
+ out.hvn=bins.map((v,i)=>({price:mn+(i+.5)*bw,vol:v,bw})).filter(b=>b.vol>avg*1.6);
+ // Sweep + absorption: wick through a level, close back inside, volume spike, small body (stalled)
+ const av=C.reduce((s,c)=>s+c.v,0)/n,start=Math.max(C.indexOf(as[as.length-1])+1,7);
+ for(let i=start;i<n;i++){
+  const c=C[i],rg=c.h-c.l||1e-9;
+  if(!(c.v>av*1.8&&Math.abs(c.c-c.o)<rg*.5))continue;
+  const d=(c.l<L.pdl&&c.c>L.pdl)||(c.l<L.al&&c.c>L.al)?1:(c.h>L.pdh&&c.c<L.pdh)||(c.h>L.ah&&c.c<L.ah)?-1:0;
+  if(d)out.bubbles.push({i,t:c.t,d,price:d>0?c.l:c.h,vol:c.v,r:Math.min(.9,.22+.16*c.v/av)});
+ }
+ const b=out.bubbles[out.bubbles.length-1];out.stages.sweep=!!b;if(!b)return out;
+ const {i:si,d}=b,sw=C.slice(si-6,si),swing=d>0?hi(sw):lo(sw);
+ // MSS: first close beyond the pre-sweep swing
+ let j=-1;for(let k=si+1;k<n;k++)if(d>0?C[k].c>swing:C[k].c<swing){j=k;break}
+ out.stages.mss=j>0;if(j<0)return out;
+ out.mss={from:si,to:j,price:swing,d};
+ // Stacked imbalance: displacement candles dominated by aggressive buyers (>62%) or sellers (<38%)
+ for(let k=si+1;k<=j;k++){const r=C[k].bv/C[k].v;if(d>0?r>.62:r<.38)out.imb.push({i:k,d,o:C[k].o,c:C[k].c})}
+ out.stages.imb=out.imb.length>=2;
+ // OTE: 61.8%-78.6% retracement of the leg from the absorption extreme to the post-MSS extreme
+ const post=C.slice(j),ext=d>0?hi(post):lo(post),r=Math.abs(ext-b.price);
+ const z=[ext-d*.618*r,ext-d*.786*r];out.ote={lo:Math.min(...z),hi:Math.max(...z),from:j,d};
+ const last=C[n-1].c,inZone=last>=out.ote.lo&&last<=out.ote.hi,valid=d>0?last>b.price:last<b.price;
+ out.stages.ote=inZone;
+ // Levels: entry mid-OTE, SL behind bubble extreme, TP1 nearest opposing HVN, TP2 opposing PDH/PDL
+ const entry=snap((z[0]+z[1])/2,spec.tick),sl=snap(b.price-d*slTicks*spec.tick,spec.tick);
+ const tp1=snap(out.hvn.map(h=>h.price).filter(p=>(p-entry)*d>spec.tick*4).sort((a,c)=>Math.abs(a-entry)-Math.abs(c-entry))[0]??ext,spec.tick);
+ let tp2=d>0?L.pdh:L.pdl;if((tp2-tp1)*d<=0)tp2=ext+d*.5*r;tp2=snap(tp2,spec.tick);
+ const risk=Math.abs(entry-sl);
+ out.setup={d,side:d>0?'BUY':'SELL',entry,sl,tp1,tp2,riskTicks:Math.round(risk/spec.tick),rewardTicks:Math.round(Math.abs(tp2-entry)/spec.tick),rr:+(Math.abs(tp2-entry)/risk).toFixed(2),from:j,bubble:b};
+ const ag=out.agents=runAgents({C,L,bub:out.bubbles,W:C.slice(si),si,d});
+ if(out.stages.imb&&valid&&inZone&&ag.score>.15&&ag.risk>.5)out.signal={...out.setup,key:`${spec.sym}-${b.t}`,consensus:ag.score};
+ return out;
+}
+const formatAlert=(s,spec)=>{const f=p=>Number(p).toFixed(spec.dec);
+ return `🚨 ${spec.sym} ${s.side} SIGNAL | Entry: ${f(s.entry)} | SL: ${f(s.sl)} (-${s.riskTicks} ticks) | TP1: ${f(s.tp1)} | TP2: ${f(s.tp2)} (+${s.rewardTicks} ticks) | RR: 1:${s.rr}`};
+// Feed layer. Crypto = live Binance (no key). Everything else = scripted simulator that plays full
+// sweep -> displacement -> OTE retrace stories so the 3D scene animates on launch.
+// TODO(real feeds): add adapters for Databento (futures), Twelve Data / Finnhub (forex, stocks) next to binance().
+const MS={'1m':6e4,'5m':3e5,'15m':9e5,'1H':36e5,'4H':144e5},BI={'1m':'1m','5m':'5m','15m':'15m','1H':'1h','4H':'4h'};
+// Session tags. roll = UTC hour the trading day starts: 0 for 24/7 markets, 22 for CME (21 in US summer time).
+const tagSessions=(C,roll=0)=>{const day=t=>Math.floor((t-roll*36e5)/864e5),td=day(C[C.length-1].t);
+ return C.map(c=>({...c,s:day(c.t)===td-1?'P':day(c.t)===td&&new Date(c.t).getUTCHours()<8?'A':undefined}))};
+// Every USDT spot pair and USDT perpetual on Binance (hundreds of symbols, includes the gold/silver/stock perps), added to SPECS with real tick sizes.
+async function loadUniverse(SPECS){
+ const get=u=>fetch(u).then(r=>r.json()),dp=t=>(t.replace(/0+$/,'').split('.')[1]||'').length;
+ const mk=(s,cat,src)=>{const t=s.filters.find(x=>x.filterType==='PRICE_FILTER').tickSize;return {sym:s.symbol,name:`${s.baseAsset}/${s.quoteAsset}${src==='binancefut'?' perp':''}`,cat,tick:+t,pv:1,base:0,src,dec:dp(t)}};
+ let n=0;
+ try{for(const s of (await get('https://api.binance.com/api/v3/exchangeInfo')).symbols)if(s.quoteAsset==='USDT'&&s.status==='TRADING'&&s.isSpotTradingAllowed&&!SPECS[s.symbol]){SPECS[s.symbol]=mk(s,'Crypto','binance');n++}}catch{}
+ try{for(const s of (await get('https://fapi.binance.com/fapi/v1/exchangeInfo')).symbols)if(s.quoteAsset==='USDT'&&s.contractType==='PERPETUAL'&&s.status==='TRADING'&&!SPECS[s.symbol]){SPECS[s.symbol]=mk(s,'Binance perps','binancefut');n++}}catch{}
+ return n;
+}
+const cand=k=>({t:k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5],bv:+k[9]});
+// Binance spot (crypto) and USDⓈ-M futures (gold XAUUSDT, silver XAGUSDT): free, 24/7, real volume + taker-buy volume.
+// Reconnects with backoff, re-downloads history after a drop (no gaps), and restarts a socket that goes quiet for 30s.
+async function binance(spec,tf,push,status){
+ const fut=spec.src==='binancefut',rest=fut?'https://fapi.binance.com/fapi/v1':'https://api.binance.com/api/v3',wss=fut?'wss://fstream.binance.com/ws':'wss://stream.binance.com:9443/ws';
+ try{const ex=await fetch(fut?`${rest}/exchangeInfo`:`${rest}/exchangeInfo?symbol=${spec.sym}`).then(r=>r.json()),
+  f=ex.symbols.find(x=>x.symbol===spec.sym).filters.find(x=>x.filterType==='PRICE_FILTER');
+  if(f){spec.tick=+f.tickSize;spec.dec=(f.tickSize.replace(/0+$/,'').split('.')[1]||'').length}}catch{} // real tick size from the exchange
+ let C=[],ws,dead=false,last=Date.now(),tries=0;
+ const hist=async()=>{C=(await fetch(`${rest}/klines?symbol=${spec.sym}&interval=${BI[tf]}&limit=500`).then(r=>r.json())).map(cand);push(tagSessions(C,0))};
+ await hist();status('Live · Binance');
+ const open=()=>{ws=new WebSocket(`${wss}/${spec.sym.toLowerCase()}@kline_${BI[tf]}`);
+  ws.onopen=()=>{last=Date.now();status('Live · Binance');if(tries>0)hist().catch(()=>{});tries=0};
+  ws.onmessage=e=>{last=Date.now();const k=JSON.parse(e.data).k;if(!k)return;const c={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,v:+k.v,bv:+k.V};
+   C[C.length-1].t===c.t?C[C.length-1]=c:C.push(c);C=C.slice(-400);push(tagSessions(C,0))};
+  ws.onclose=()=>{if(dead)return;status('Connection lost · reconnecting…');setTimeout(open,Math.min(3e4,1e3*2**tries++))};
+  ws.onerror=()=>{try{ws.close()}catch{}}};
+ open();
+ const dog=setInterval(()=>{if(Date.now()-last>3e4){status('Feed stalled · reconnecting…');last=Date.now();try{ws.close()}catch{}}},1e4);
+ return ()=>{dead=true;clearInterval(dog);try{ws.close()}catch{}};
+}
+// One scripted day: prev-day range, Asia range, run at liquidity, sweep spike, displacement, OTE retrace, continuation.
+function scenario(p0,ms,t0){
+ const d=Math.random()<.5?1:-1,R=p0*.004,out=[];let p=p0,t=t0;
+ const add=(c,v,r,wu=.05,wd=.05,s)=>{const vv=v*(.8+Math.random()*.4);
+  out.push({t:t+=ms,o:p,h:Math.max(p,c)+R*wu,l:Math.min(p,c)-R*wd,c,v:vv,bv:vv*(r+(Math.random()-.5)*.08),s});p=c};
+ for(let k=0;k<40;k++)add(p0+R*Math.sin(k/6)+R*.15*(Math.random()-.5),100,.5,.05,.05,'P');
+ for(let k=0;k<20;k++)add(p0+.3*R*Math.sin(k/3)+R*.05*(Math.random()-.5),80,.5,.05,.05,'A');
+ for(let k=1;k<=4;k++)add(p+(p0-d*1.1*R-p)*(k/4)*(k<4?.6:1),100,.5-d*.04);
+ add(p0-d*1.0*R,300,.5,d>0?.05:.5,d>0?.5:.05);                 // sweep candle: long wick, small body, volume spike
+ for(let k=0;k<4;k++)add(p+d*.55*R,200,d>0?.75:.25);            // displacement: stacked aggressive imbalance
+ const ext=p,tgt=ext+(p0-d*1.5*R-ext)*.7;
+ for(let k=1;k<=8;k++)add(ext+(tgt-ext)*k/8,90,.5);             // retrace into the OTE zone
+ for(let k=1;k<=10;k++)add(tgt+(p0+d*1.3*R-tgt)*k/10,110,d>0?.6:.4);
+ return out;
+}
+async function databento(spec,tf,push,status,onFail){
+ const ms=MS[tf],h=await fetch(`/api/history?sym=${spec.sym}&tf=${tf}`);
+ if(!h.ok)throw new Error((await h.json()).error||'history failed');
+ let C=tagSessions((await h.json()).candles,22);push(C);status('Live · Databento CME');
+ const es=new EventSource(`/api/stream?sym=${spec.sym}`);
+ es.onopen=()=>status('Live · Databento CME');es.onerror=()=>status('Databento connection lost · reconnecting…');
+ es.addEventListener('t',e=>{for(const [ts,p,sz,buy] of JSON.parse(e.data)){
+  const b=Math.floor(ts/ms)*ms;if(!C.length||C[C.length-1].t!==b)C.push({t:b,o:p,h:p,l:p,c:p,v:0,bv:0});
+  const k=C[C.length-1];k.h=Math.max(k.h,p);k.l=Math.min(k.l,p);k.c=p;k.v+=sz;k.bv+=sz*buy}
+  C=C.slice(-700);push([...C])});
+ es.addEventListener('fail',e=>{es.close();status('Databento: '+JSON.parse(e.data).error+' · simulated');onFail()});
+ return ()=>es.close();
+}
+function simulate(spec,tf,push){
+ const ms=MS[tf];let scen=scenario(spec.base,ms,Date.now()-90*ms),cur=62,prog=0,hist=scen.slice(0,cur);
+ const emit=()=>{const k=scen[cur],o=k.o,c=o+(k.c-o)*prog;
+  const part=prog?[{...k,c,h:Math.max(o,c)+(k.h-Math.max(k.o,k.c))*prog,l:Math.min(o,c)-(Math.min(k.o,k.c)-k.l)*prog,v:k.v*prog,bv:k.bv*prog}]:[];
+  push([...hist,...part].slice(-130))};
+ emit();
+ const id=setInterval(()=>{prog+=1/3;
+  if(prog>=.99){prog=0;hist.push(scen[cur]);cur++;
+   if(cur>=scen.length){hist=hist.slice(-40).map(({s,...c})=>c);const l=hist[hist.length-1];scen=scenario(l.c,ms,l.t);cur=0}}
+  emit()},300);
+ return ()=>clearInterval(id);
+}
+function startFeed(spec,tf,push,status){
+ let off=()=>{},dead=false;const set=f=>{off=f;if(dead)f()};
+ (async()=>{
+  if(spec.src==='binance'||spec.src==='binancefut'){try{return set(await binance(spec,tf,push,status))}catch{status('Binance unreachable · simulated')}}
+  else if(spec.src==='databento'){try{return set(await databento(spec,tf,push,status,()=>set(simulate(spec,tf,push))))}catch(e){status(e.message+' · simulated')}}
+  else status('Simulated · no live volume source for this market');
+  if(!spec.base){status('Could not reach the exchange for '+spec.sym);return}
+  set(simulate(spec,tf,push));
+ })();
+ return ()=>{dead=true;off()};
+}
+// Follows open trades after the signal and reports TP1 / TP2 / SL / expiry once each.
+// If one candle touches both stop and target, the stop is assumed first (conservative).
+function updateTrades(T,C,spec,maxBars=100){
+ const ev=[],f=p=>spec?Number(p).toFixed(spec.dec):p;
+ for(const x of T){if(x.status!=='open')continue;let bars=0;
+  const say=(label,p,icon)=>{x.status=label;ev.push({key:x.key,symbol:x.symbol,label,text:`${icon} ${x.symbol} ${label} @ ${f(p)} (${x.side} from ${f(x.entry)})`})};
+  for(const c of C){if(c.t<=x.t0)continue;bars++;
+   if(x.d>0?c.l<=x.sl:c.h>=x.sl){say('Stop hit',x.sl,'❌');break}
+   if(x.d>0?c.h>=x.tp2:c.l<=x.tp2){say('TP2 hit',x.tp2,'🏁');break}
+   if(!x.tp1Hit&&(x.d>0?c.h>=x.tp1:c.l<=x.tp1)){x.tp1Hit=true;ev.push({key:x.key,symbol:x.symbol,label:'TP1 hit',text:`✅ ${x.symbol} TP1 hit @ ${f(x.tp1)} (${x.side} from ${f(x.entry)})`})}
+   if(bars>=maxBars){say('Expired',c.c,'⏱');break}}}
+ return ev;
+}
+// Beep + vibration for new signals. Browsers only allow audio after a click, so call enableSound() from the toggle.
+let ctx;
+const enableSound=()=>{ctx=ctx||new (window.AudioContext||window.webkitAudioContext)()};
+function beep(up){
+ if(ctx)[0,.15].forEach((d,i)=>{const o=ctx.createOscillator(),g=ctx.createGain();o.frequency.value=up?(i?880:660):(i?440:660);g.gain.value=.08;o.connect(g);g.connect(ctx.destination);o.start(ctx.currentTime+d);o.stop(ctx.currentTime+d+.12)});
+ if(navigator.vibrate)navigator.vibrate(up?[80]:[80,60,80]);
+}
+const $=id=>document.getElementById(id),COL={up:0x27e39a,dn:0xff4d5e,cy:0x3ee0ff,or:0xff9a3c};
+let spec,C=[],A,seen='',LOG=[],stopFeed=()=>{};const LY={lvl:'Liquidity planes',hvn:'HVN profile',bub:'Absorption bubbles',ote:'OTE zone',imb:'Imbalance + MSS',trade:'Trade levels'},on={lvl:1,hvn:1,bub:1,ote:1,imb:1,trade:1};
+// ---- 3D scene: X time, Y price (10 units), Z depth. Phase4o4 layers at z=0; ATAS layers extend toward the camera.
+const cv=$('cv'),ren=new THREE.WebGLRenderer({canvas:cv,antialias:true}),scn=new THREE.Scene(),cam=new THREE.PerspectiveCamera(45,1,.1,300),ctl=new THREE.OrbitControls(cam,cv);
+cam.position.set(-8,5,26);ctl.enableDamping=true;scn.add(new THREE.AmbientLight(0xffffff,.8));const pl=new THREE.PointLight(0xffffff,1);pl.position.set(0,12,12);scn.add(pl);
+const dyn=new THREE.Group();scn.add(dyn);
+function fit(){ren.setPixelRatio(Math.min(devicePixelRatio,2));ren.setSize(innerWidth,innerHeight,false);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()}addEventListener('resize',fit);fit();
+const UB=new THREE.BoxGeometry(1,1,1),US=new THREE.SphereGeometry(1,24,24),UC=new THREE.CylinderGeometry(1,1,1,8),UK=new THREE.ConeGeometry(1,1,8),M={};
+const solid=c=>M['s'+c]||(M['s'+c]=new THREE.MeshStandardMaterial({color:c,emissive:c,emissiveIntensity:.4})),glow=(c,o)=>M['g'+c+o]||(M['g'+c+o]=new THREE.MeshBasicMaterial({color:c,transparent:true,opacity:o,blending:THREE.AdditiveBlending,depthWrite:false}));
+const put=(g,m,s,x,y,z)=>{const o=new THREE.Mesh(g,m);o.scale.set(...s);o.position.set(x,y,z);dyn.add(o);return o};
+function tag(t,c,x,y,z){const k=document.createElement('canvas');k.width=512;k.height=64;const g=k.getContext('2d');g.font='600 30px sans-serif';g.fillStyle='#'+c.toString(16).padStart(6,'0');g.fillText(t,4,40);
+ const s=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(k),transparent:true,depthTest:false}));s.scale.set(8,1,1);s.position.set(x+4,y,z);dyn.add(s)}
+function build(){
+ dyn.children.slice().forEach(o=>{dyn.remove(o);if(o.isSprite){o.material.map.dispose();o.material.dispose()}});
+ const off=Math.max(0,C.length-150),V=C.slice(off),n=V.length,L=A.levels,v=V.flatMap(c=>[c.h,c.l]);if(L)v.push(L.pdh,L.pdl);
+ const mn=Math.min(...v),S=10/(Math.max(...v)-mn||1),Y=p=>(p-mn)*S-5,X=i=>(i-off-n/2)*.3,W=n*.3,xe=X(n+off)+2,s=A.setup;
+ PUL=[];GEO={X,Y,S,off,n};
+ V.forEach((c,i)=>{const k=solid(c.c>=c.o?COL.up:COL.dn),bd=put(UB,k,[.2,.02,.2],X(i+off),Y((c.o+c.c)/2),0),wk=put(UB,k,[.03,.02,.03],X(i+off),Y((c.h+c.l)/2),0);
+  if(i===n-1){if(LV.t!==c.t){LV.t=c.t;LV.sh=c.o}Object.assign(LV,{c:c.c,o:c.o,h:c.h,l:c.l,bd,wk})}});
+ if(on.lvl&&L)[['PDH prev day high',L.pdh,COL.or],['PDL prev day low',L.pdl,COL.or],['Asia high',L.ah,COL.cy],['Asia low',L.al,COL.cy]].forEach(([t,p,c])=>{put(UB,glow(c,.2),[W,.015,3],0,Y(p),-.5);tag(t,c,-W/2-3,Y(p),0)});
+ if(on.hvn)A.hvn.forEach(h=>{const len=1+5*h.vol/A.hvnMax;put(UB,glow(COL.cy,.45),[.35,Math.max(h.bw*S*.8,.05),len],W/2+.6,Y(h.price),len/2)});
+ if(on.bub)A.bubbles.filter(b=>b.i>=off).forEach(b=>{BORN[b.t]??=performance.now();PUL.push({m:put(US,glow(b.d>0?COL.up:COL.dn,.6),[1,1,1],X(b.i),Y(b.price),.4),r:b.r,t:BORN[b.t]})});
+ if(on.imb){A.imb.filter(k=>k.i>=off).forEach(k=>{const c=k.d>0?COL.up:COL.dn;put(UC,glow(c,.9),[.03,Math.abs(k.c-k.o)*S,.03],X(k.i),Y((k.o+k.c)/2),.45);const a=put(UK,glow(c,.9),[.09,.2,.09],X(k.i),Y(k.c),.45);if(k.d<0)a.rotation.z=Math.PI});
+  if(A.mss&&A.mss.from>=off){put(UB,glow(A.mss.d>0?COL.up:COL.dn,.9),[X(A.mss.to)-X(A.mss.from),.03,.03],(X(A.mss.to)+X(A.mss.from))/2,Y(A.mss.price),0);tag(A.mss.d>0?'Bullish MSS':'Bearish MSS',A.mss.d>0?COL.up:COL.dn,X(A.mss.to),Y(A.mss.price)+.4,0)}}
+ if(on.ote&&A.ote)put(UB,glow(COL.or,.22),[xe-X(Math.max(A.ote.from,off)),Math.max((A.ote.hi-A.ote.lo)*S,.05),1.2],(X(Math.max(A.ote.from,off))+xe)/2,Y((A.ote.lo+A.ote.hi)/2),0);
+ if(on.trade&&s)[['Entry (OTE)',s.entry,0x9aa4b2],['SL behind absorption',s.sl,COL.dn],['TP1 nearest HVN',s.tp1,COL.up],['TP2 opposing liquidity',s.tp2,COL.up]].forEach(([t,p,c])=>{put(UB,glow(c,.9),[xe-X(Math.max(s.from,off)),.04,.04],(X(Math.max(s.from,off))+xe)/2,Y(p),.3);tag(t+' '+p,c,xe,Y(p),.3)});
+}
+// ---- Motion: spheres pop in and breathe, the live candle glides to each tick, the camera flies to new signals. Off if the OS asks for reduced motion.
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches,V3=THREE.Vector3;let PUL=[],GEO={},LV={},BORN={},GOAL=null,lt=performance.now();
+(function loop(){requestAnimationFrame(loop);const t=performance.now(),dt=Math.min(.1,(t-lt)/1e3);lt=t;
+ PUL.forEach(p=>{const a=Math.min(1,(t-p.t)/600),e=1+2.70158*Math.pow(a-1,3)+1.70158*Math.pow(a-1,2);p.m.scale.setScalar(p.r*e*(RM?1:1+.1*Math.sin(t/300)))});
+ if(LV.bd){LV.sh=RM?LV.c:LV.sh+(LV.c-LV.sh)*Math.min(1,dt*12);const v=LV.sh,hi=Math.max(LV.h,v,LV.o),lw=Math.min(LV.l,v,LV.o),{Y,S}=GEO;
+  LV.bd.scale.y=Math.max(Math.abs(v-LV.o)*S,.02);LV.bd.position.y=Y((LV.o+v)/2);LV.wk.scale.y=Math.max((hi-lw)*S,.02);LV.wk.position.y=Y((hi+lw)/2)}
+ if(GOAL){if(t>GOAL.until)GOAL=null;else{ctl.target.lerp(GOAL.t,.05);cam.position.lerp(GOAL.p,.05)}}
+ ctl.update();ren.render(scn,cam)})();
+function fx(s){if(SND)beep(s.d>0);const f=$('flash');f.style.setProperty('--c',s.d>0?'#27e39a':'#ff4d5e');f.className='';void f.offsetWidth;f.className='on';
+ if(!RM){const {X,Y,n,off}=GEO,tg=new V3(X(n+off)-3,Y(s.entry),0);GOAL={t:tg,p:new V3(tg.x-6,tg.y+3,14),until:performance.now()+1800}}}
+// ---- Globe (2D dots): session markers glow orange while that session is open (UTC hours)
+const gc=$('gl').getContext('2d'),PT=Array.from({length:700},(_,i)=>{const y=1-2*(i+.5)/700,r=Math.sqrt(1-y*y),t=i*2.399963;return [Math.cos(t)*r,y,Math.sin(t)*r]}),
+ CT=[['Tokyo',35.7,139.7,0,9],['London',51.5,-.1,7,16],['New York',40.7,-74,13,21]],pr=(p,r)=>[p[0]*Math.cos(r)+p[2]*Math.sin(r),p[1],-p[0]*Math.sin(r)+p[2]*Math.cos(r)];
+function globe(t){const r=t/4e3,h=new Date().getUTCHours();gc.clearRect(0,0,440,240);gc.fillStyle='#3ee0ff';
+ PT.forEach(p=>{const q=pr(p,r);if(q[2]>0)gc.fillRect(220+q[0]*100,120-q[1]*100,1.6,1.6)});
+ CT.forEach(([n,la,lo,s,e])=>{const a=(90-la)*Math.PI/180,b=lo*Math.PI/180,q=pr([Math.sin(a)*Math.cos(b),Math.cos(a),Math.sin(a)*Math.sin(b)],r);if(q[2]>0){gc.fillStyle=h>=s&&h<e?'#ff9a3c':'#4a6a85';gc.beginPath();gc.arc(220+q[0]*100,120-q[1]*100,5,0,7);gc.fill();gc.fillStyle='#d7e3f4';gc.font='12px sans-serif';gc.fillText(n,228+q[0]*100,118-q[1]*100)}});
+ requestAnimationFrame(globe)}requestAnimationFrame(globe);
+// ---- UI
+const cells={};SQUADS.forEach(q=>{const d=document.createElement('div');d.innerHTML=`<div class="row mut"><span>${q}</span><span id="q${q}"></span></div><div class="g"></div>`;$('ag').appendChild(d);cells[q]=[...Array(15)].map(()=>d.querySelector('.g').appendChild(document.createElement('i')))});
+Object.entries(LY).forEach(([k,n])=>{const l=document.createElement('label');l.innerHTML=`<input type="checkbox" checked> ${n}`;l.firstChild.onchange=e=>{on[k]=e.target.checked;build()};$('lay').appendChild(l)});
+function fillList(){const dl=$('symlist');dl.innerHTML='';Object.values(SPECS).forEach(s=>{const o=document.createElement('option');o.value=s.sym;o.label=`${s.cat} · ${s.name} · ${/^binance/.test(s.src)?'live':'simulated here'}`;dl.appendChild(o)})}
+fillList();loadUniverse(SPECS).then(n=>n&&fillList());
+const col=(v,r)=>r?`rgba(62,224,255,${v})`:v>=0?`rgba(39,227,154,${Math.min(1,v)})`:`rgba(255,77,94,${Math.min(1,-v)})`;
+function ui(){
+ const l=C[C.length-1],ch=(l.c/C[0].o-1)*100,st=A.stages,s=A.setup,g=A.agents;
+ $('px').textContent=fmtPrice(l.c,spec);$('ch').textContent=ch.toFixed(2)+'%';$('ch').className=ch>=0?'up':'dn';
+ $('stat').textContent=st.ote?'In OTE zone':st.mss?'Structure shifted':st.sweep?'Liquidity swept':'Watching';
+ $('cons').textContent=`consensus ${(g.score*100).toFixed(0)}% · risk ${(g.risk*100).toFixed(0)}%`;$('watch').textContent=A.signal?'Signal live':'Watching';
+ SQUADS.forEach(q=>{$('q'+q).textContent=g.by[q].toFixed(2);g.votes.filter(v=>v.sq===q).forEach((v,i)=>cells[q][i].style.background=col(v.v,q==='Risk'))});
+ $('stages').innerHTML=[['Sweep + absorption',st.sweep],['Market structure shift',st.mss],['Stacked imbalance',st.imb],['Price in OTE zone',st.ote]].map(([k,v])=>`<div class="row"><span>${k}</span><span class="${v?'up':'mut'}">${v?'done':'waiting'}</span></div>`).join('');
+ const sg=$('sig');sg.style.display=A.signal?'block':'none';if(A.signal){sg.textContent=A.signal.side+' '+spec.sym;sg.className=A.signal.d>0?'up':'dn';sg.style.background=A.signal.d>0?'rgba(39,227,154,.18)':'rgba(255,77,94,.18)'}
+ $('tkt').innerHTML=s?[['Entry',s.entry,'gy'],['Stop',s.sl,'dn'],['TP1',s.tp1,'up'],['TP2',s.tp2,'up']].map(([k,v,c])=>`<div class="row"><span class="mut">${k}</span><span class="${c==='gy'?'':c}" ${c==='gy'?'style="color:#9aa4b2"':''}>${fmtPrice(v,spec)}</span></div>`).join('')+`<div class="row" style="border-top:1px solid var(--line);margin-top:4px;padding-top:4px"><span class="mut">Risk / reward</span><span>-${s.riskTicks} / +${s.rewardTicks} ticks · 1:${s.rr}</span></div>`:'<div class="mut">Waiting for a liquidity sweep with a volume spike.</div>';
+ if(A.signal&&A.signal.key!==seen){seen=A.signal.key;LOG.unshift({...A.signal,time:new Date().toLocaleTimeString()});LOG=LOG.slice(0,30);fx(A.signal);
+  $('cnt').textContent=LOG.length+' alerts';$('log').innerHTML=LOG.map(x=>`<div class="it" style="border-color:var(${x.d>0?'--up':'--dn'})"><b>${spec.sym} ${x.side}</b> <span class="mut">${x.time}</span><br>E ${x.entry} · SL ${x.sl} · TP ${x.tp1} / ${x.tp2} · 1:${x.rr}</div>`).join('')}
+}
+let SND=false,TR=[];
+function renderLog(){$('log').innerHTML=LOG.map(x=>`<div class="it" style="border-color:var(${x.d>0?'--up':'--dn'})"><b>${spec.sym} ${x.side}</b> <span class="mut">${x.time}</span> ${x.status&&x.status!=='open'?'<span style="color:var(--cy)">'+x.status+'</span>':''}<br>E ${x.entry} · SL ${x.sl} · TP ${x.tp1} / ${x.tp2} · 1:${x.rr}</div>`).join('')}
+function push(c){C=c;A=analyze(C,spec);build();ui();
+ if(A.signal&&!TR.some(x=>x.key===A.signal.key))TR.push({...A.signal,symbol:spec.sym,t0:C[C.length-1].t,status:'open',tp1Hit:false});
+ const ev=updateTrades(TR.filter(x=>x.symbol===spec.sym),C,spec);ev.forEach(e=>{const x=LOG.find(l=>l.key===e.key);if(x)x.status=e.label});if(ev.length)renderLog();
+ const s=A.setup;$('mob').textContent=s?`${A.signal?s.side+' ':''}E ${fmtPrice(s.entry,spec)} · SL ${fmtPrice(s.sl,spec)} · TP ${fmtPrice(s.tp2,spec)} · 1:${s.rr}`:'Watching · agents '+(A.agents.score*100).toFixed(0)+'%'}
+{const l=document.createElement('label');l.innerHTML='<input type="checkbox"> Sound';l.firstChild.onchange=e=>{SND=e.target.checked;if(SND)enableSound()};$('lay').appendChild(l);
+ const d=document.createElement('span');d.className='mut';d.style.cssText='margin-left:auto;font-size:11px';d.textContent='Educational tool, not financial advice. Trading carries a risk of loss.';$('lay').appendChild(d)}
+function load(sym){stopFeed();spec=SPECS[sym];seen='';LOG=[];$('cnt').textContent='0 alerts';if(spec.src==='databento')spec.src='sim';stopFeed=startFeed(spec,$('tf').value,push,m=>$('src').textContent=m)}
+$('sym').onfocus=e=>e.target.select();$('sym').onchange=e=>{const v=e.target.value.trim().toUpperCase();if(SPECS[v])load(v);else e.target.value=spec.sym};$('tf').onchange=()=>load(spec.sym);$('sym').value='BTCUSDT';load('BTCUSDT');
+</script></body></html>
